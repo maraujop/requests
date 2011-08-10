@@ -12,7 +12,7 @@ import socket
 import zlib
 
 from urllib2 import HTTPError
-from urlparse import urlparse, urlunparse
+from urlparse import urlparse, urlunparse, parse_qs
 from datetime import datetime
 
 from .config import settings
@@ -24,7 +24,7 @@ from .exceptions import RequestException, AuthenticationError, Timeout, URLRequi
 
 
 REDIRECT_STATI = (301, 302, 303, 307)
-
+OAUTH_VERSION = '1.0' 
 
 class Request(object):
     """The :class:`Request <models.Request>` object. It carries out all functionality of
@@ -42,6 +42,8 @@ class Request(object):
 
         #: Request URL.
         self.url = url
+        #: Oauth hack
+        self.normalized_url = url
         #: Dictonary of HTTP Headers to attach to the :class:`Request <models.Request>`.
         self.headers = headers
         #: Dictionary of files to multipart upload (``{filename: content}``).
@@ -70,9 +72,39 @@ class Request(object):
         self.response = Response()
 
         if isinstance(auth, (list, tuple)):
-            auth = AuthObject(*auth)
+            try:
+                #: Oauth, Consumer & Token (Optional)
+                from oauth2 import Consumer, Token
+                if len(auth) == 2 and isinstance(auth[0], Consumer) and isinstance(auth[1], Token):
+                    self.consumer = auth[0]
+                    self.token = auth[1]
+                    auth = 'oauth'
+
+                    from oauth2 import SignatureMethod_HMAC_SHA1
+                    self.signature = SignatureMethod_HMAC_SHA1()
+
+                    if self.params is None: 
+                        self.params = dict()
+
+                    import time
+                    import random
+
+                    self.params['oauth_consumer_key'] = self.consumer.key
+                    self.params['oauth_timestamp'] = str(int(time.time())) #cls.make_timestamp()
+                    self.params['oauth_nonce'] = str(random.randint(0, 100000000)) #cls.make_nonce()
+                    self.params['oauth_version'] = OAUTH_VERSION
+
+                    self.params['oauth_token'] = self.token.key
+                    if self.token.verifier:
+                        self.params['oauth_verifier'] = self.token.verifier
+
+                else:
+                    auth = AuthObject(*auth)
+            except IndexError:
+                auth = AuthObject(*auth)
         if not auth:
             auth = auth_manager.get_auth(self.url)
+
         #: :class:`AuthObject` to attach to :class:`Request <models.Request>`.
         self.auth = auth
         #: CookieJar to attach to :class:`Request <models.Request>`.
@@ -259,6 +291,98 @@ class Request(object):
         else:
             return self.url
 
+    def _to_url(self):
+        """Serialize as a URL for a GET request."""
+        base_url = urlparse(self.url)
+        try:
+            query = base_url.query
+        except AttributeError:
+            # must be python <2.5
+            query = base_url[4]
+        query = parse_qs(query)
+        for k, v in self.params.items():
+            query.setdefault(k, []).append(v)
+        
+        try:
+            scheme = base_url.scheme
+            netloc = base_url.netloc
+            path = base_url.path
+            params = base_url.params
+            fragment = base_url.fragment
+        except AttributeError:
+            # must be python <2.5
+            scheme = base_url[0]
+            netloc = base_url[1]
+            path = base_url[2]
+            params = base_url[3]
+            fragment = base_url[5]
+        
+        url = (scheme, netloc, path, params,
+               urllib.urlencode(query, True), fragment)
+        return urlunparse(url)
+
+    @staticmethod
+    def _split_url_string(param_str):
+        """Turn URL string into parameters."""
+        parameters = parse_qs(param_str.encode('utf-8'), keep_blank_values=True)
+        for k, v in parameters.iteritems():
+            parameters[k] = urllib.unquote(v[0])
+        return parameters
+
+    def get_normalized_parameters(self):
+        """Return a string that contains the parameters that must be signed. 
+        This method is called by oauth2 SignatureMethod subclass self.signature
+        Thus it need to be called this way or we need to create our own SignatureMethod"""
+        from oauth2 import to_utf8_if_string, to_utf8
+
+        items = []
+        for key, value in self.params.iteritems():
+            if key == 'oauth_signature':
+                continue
+            # 1.0a/9.1.1 states that kvp must be sorted by key, then by value,
+            # so we unpack sequence values into multiple items for sorting.
+            if isinstance(value, basestring):
+                items.append((to_utf8_if_string(key), to_utf8(value)))
+            else:
+                try:
+                    value = list(value)
+                except TypeError, e:
+                    assert 'is not iterable' in str(e)
+                    items.append((to_utf8_if_string(key), to_utf8_if_string(value)))
+                else:
+                    items.extend((to_utf8_if_string(key), to_utf8_if_string(item)) for item in value)
+
+        # Include any query string parameters from the provided URL
+        query = urlparse(self.url)[4]
+
+        url_items = self._split_url_string(query).items()
+        url_items = [(to_utf8(k), to_utf8(v)) for k, v in url_items if k != 'oauth_signature' ]
+        items.extend(url_items)
+
+        items.sort()
+        encoded_str = urllib.urlencode(items)
+        # Encode signature parameters per Oauth Core 1.0 protocol
+        # spec draft 7, section 3.6
+        # (http://tools.ietf.org/html/draft-hammer-oauth-07#section-3.6)
+        # Spaces must be encoded with "%20" instead of "+"
+        return encoded_str.replace('+', '%20').replace('%7E', '~')
+
+    def _sign_request(self):
+        """Using self.signature, self.consumer and self.token, sign request
+        for Oauth authentication handling. This means adding `oatuh_signature_method`
+        and `oauth_signature` to request parameters."""
+
+        #if not self.is_form_encoded:
+            # according to
+            # http://oauth.googlecode.com/svn/spec/ext/body_hash/1.0/oauth-bodyhash.html
+            # section 4.1.1 "OAuth Consumers MUST NOT include an
+            # oauth_body_hash parameter on requests with form-encoded
+            # request bodies."
+            # self['oauth_body_hash'] = base64.b64encode(sha(self.body).digest())
+
+        self.params['oauth_signature_method'] = self.signature.name
+        self.params['oauth_signature'] = self.signature.sign(self, self.consumer, self.token)
+ 
 
     def send(self, anyway=False):
         """Sends the request. Returns True of successful, false if not.
@@ -279,6 +403,13 @@ class Request(object):
                 datetime.now().isoformat(), self.method, self.url
             ))
 
+        # If authentication is set to oauth, we need to sign the request
+        # Generate the oauth url
+        if self.auth == "oauth":
+            self._sign_request()
+            self.url = self._to_url()
+            # Very hacky, adapting _get_opener is the right way to do this
+            self.auth = None
 
         url = self._build_url()
         if self.method in ('GET', 'HEAD', 'DELETE'):

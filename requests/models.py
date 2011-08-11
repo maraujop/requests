@@ -43,7 +43,7 @@ class Request(object):
         #: Request URL.
         self.url = url
         #: Oauth hack
-        self.normalized_url = url
+        self.normalized_url = self._normalize_url(url)
         #: Dictonary of HTTP Headers to attach to the :class:`Request <models.Request>`.
         self.headers = headers
         #: Dictionary of files to multipart upload (``{filename: content}``).
@@ -322,6 +322,24 @@ class Request(object):
         return urlunparse(url)
 
     @staticmethod
+    def _normalize_url(url):
+        if url is not None:
+            scheme, netloc, path, params, query, fragment = urlparse(url)
+
+            # Exclude default port numbers.
+            if scheme == 'http' and netloc[-3:] == ':80':
+                netloc = netloc[:-3]
+            elif scheme == 'https' and netloc[-4:] == ':443':
+                netloc = netloc[:-4]
+            if scheme not in ('http', 'https'):
+                raise ValueError("Unsupported URL %s (%s)." % (value, scheme))
+
+            # Normalized URL excludes params, query, and fragment.
+            return urlunparse((scheme, netloc, path, None, None, None))
+        else:
+            return None
+
+    @staticmethod
     def _split_url_string(param_str):
         """Turn URL string into parameters."""
         parameters = parse_qs(param_str.encode('utf-8'), keep_blank_values=True)
@@ -372,13 +390,24 @@ class Request(object):
         for Oauth authentication handling. This means adding `oatuh_signature_method`
         and `oauth_signature` to request parameters."""
 
-        #if not self.is_form_encoded:
+        is_form_encoded = \
+                     self.headers.get('Content-Type') == 'application/x-www-form-urlencoded'
+        
+        if not is_form_encoded and self._enc_data is not None:
             # according to
             # http://oauth.googlecode.com/svn/spec/ext/body_hash/1.0/oauth-bodyhash.html
             # section 4.1.1 "OAuth Consumers MUST NOT include an
             # oauth_body_hash parameter on requests with form-encoded
             # request bodies."
-            # self['oauth_body_hash'] = base64.b64encode(sha(self.body).digest())
+            import base64
+            try:
+                from hashlib import sha1
+                sha = sha1
+            except ImportError:
+                # hashlib was added in Python 2.5
+                import sha
+
+            self.params['oauth_body_hash'] = base64.b64encode(sha(self._enc_data).digest())
 
         self.params['oauth_signature_method'] = self.signature.name
         self.params['oauth_signature'] = self.signature.sign(self, self.consumer, self.token)

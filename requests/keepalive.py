@@ -331,7 +331,7 @@ class KeepAliveHandler:
 
 class HTTPHandler(KeepAliveHandler, urllib2.HTTPHandler):
     def __init__(self):
-        print "HTTPHandler"
+        print "HTTPHandler()"
         KeepAliveHandler.__init__(self)
 
     def http_open(self, req):

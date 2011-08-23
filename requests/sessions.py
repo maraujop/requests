@@ -13,19 +13,25 @@ import cookielib
 
 from . import api
 from .utils import add_dict_to_cookiejar
-
+from keepalive import HTTPHandler
 
 
 class Session(object):
     """A Requests session."""
 
-    __attrs__ = ['headers', 'cookies', 'auth', 'timeout', 'proxies', 'hooks']
+    __attrs__ = ['headers', 'cookies', 'auth', 'timeout', 'proxies', 'hooks', 'keepalive']
 
 
     def __init__(self, **kwargs):
 
         # Set up a CookieJar to be used by default
         self.cookies = cookielib.FileCookieJar()
+
+        # Keepalive support
+        if kwargs.has_key('keepalive'):
+            keepalive = kwargs.pop('keepalive')
+            if keepalive:
+                setattr(self, 'keepalive', HTTPHandler())
 
         # Map args from kwargs to instance-local variables
         map(lambda k, v: (k in self.__attrs__) and setattr(self, k, v),

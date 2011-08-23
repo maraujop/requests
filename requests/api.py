@@ -23,7 +23,7 @@ __all__ = ('request', 'get', 'head', 'post', 'patch', 'put', 'delete')
 
 def request(method, url,
     params=None, data=None, headers=None, cookies=None, files=None, auth=None,
-    timeout=None, allow_redirects=False, proxies=None, hooks=None):
+    timeout=None, allow_redirects=False, proxies=None, hooks=None, keepalive=None):
 
     """Constructs and sends a :class:`Request <Request>`.
     Returns :class:`Response <Response>` object.
@@ -47,6 +47,8 @@ def request(method, url,
         cookies = {}
 
     cookies = cookiejar_from_dict(cookies)
+    if isinstance(keepalive, bool):
+        keepalive = None
 
     args = dict(
         method = method,
@@ -60,6 +62,7 @@ def request(method, url,
         timeout = timeout or config.settings.timeout,
         allow_redirects = allow_redirects,
         proxies = proxies or config.settings.proxies,
+        keepalive = keepalive,
     )
 
     # Arguments manipulation hook.

@@ -38,7 +38,7 @@ class Request(object):
     def __init__(self,
         url=None, headers=dict(), files=None, method=None, data=dict(),
         params=dict(), auth=None, cookiejar=None, timeout=None, redirect=False,
-        allow_redirects=False, proxies=None):
+        allow_redirects=False, proxies=None, keepalive=None):
 
         #: Float describ the timeout of the request.
         #  (Use socket.setdefaulttimeout() as fallback)
@@ -73,6 +73,9 @@ class Request(object):
 
         # Dictionary mapping protocol to the URL of the proxy (e.g. {'http': 'foo.bar:3128'})
         self.proxies = proxies
+
+        # HTTPHandler used for doing keepalive connections
+        self.keepalive = keepalive
 
         self.data, self._enc_data = self._encode_params(data)
         self.params, self._enc_params = self._encode_params(params)
@@ -128,6 +131,10 @@ class Request(object):
         """Creates appropriate opener object for urllib2."""
 
         _handlers = []
+
+        if self.keepalive is not None:
+            print "Adding Keepalive handler"
+            _handlers.append(self.keepalive)
 
         if self.cookiejar is not None:
             _handlers.append(urllib2.HTTPCookieProcessor(self.cookiejar))
